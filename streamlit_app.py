@@ -9,17 +9,19 @@ import traceback
 from pytube import YouTube
 import io
 
+@st.cache_data
 def download_youtube_audio(url):
     try:
         yt = YouTube(url)
         audio_stream = yt.streams.filter(only_audio=True).first()
+        if not audio_stream:
+            return None
         buffer = io.BytesIO()
         audio_stream.stream_to_buffer(buffer)
         buffer.seek(0)
         return buffer.read()
     except Exception as e:
         st.error(f"Error downloading YouTube audio: {str(e)}")
-        st.error(traceback.format_exc())
         return None
 
 def extract_audio_from_video(video_file):
@@ -30,7 +32,6 @@ def extract_audio_from_video(video_file):
         return temp_audio_file.name
     except Exception as e:
         st.error(f"Error extracting audio from video: {str(e)}")
-        st.error(traceback.format_exc())
         return None
 
 @st.cache_data
@@ -58,16 +59,7 @@ def summarize_with_openrouter(transcript, api_key):
         return response.json()['choices'][0]['message']['content']
     except requests.exceptions.RequestException as e:
         st.error(f"Error calling OpenRouter API: {str(e)}")
-        st.error(traceback.format_exc())
         return None
-
-# Initialize session state
-if 'transcript' not in st.session_state:
-    st.session_state.transcript = None
-if 'summary' not in st.session_state:
-    st.session_state.summary = None
-if 'chat_history' not in st.session_state:
-    st.session_state.chat_history = []
 
 # Streamlit app
 st.set_page_config(page_title="Audio Transcription and Analysis", layout="wide")
@@ -158,7 +150,7 @@ if assemblyai_api_key and openrouter_api_key:
                                     transcript = transcriber.transcribe(temp_file.name, config)
                                 os.unlink(temp_file.name)
                             else:
-                                st.error("Failed to download YouTube audio.")
+                                st.error("Failed to download YouTube audio. The video might be unavailable or restricted.")
                                 st.stop()
                         else:
                             transcript = transcriber.transcribe(file_url, config)
@@ -166,17 +158,12 @@ if assemblyai_api_key and openrouter_api_key:
                         st.error("Please enter a valid URL before transcribing.")
                         st.stop()
 
-                # Store transcript in session state
                 st.session_state.transcript = transcript.text
-
-                # OpenRouter summarization
                 st.session_state.summary = summarize_with_openrouter(transcript.text, openrouter_api_key)
-
                 st.success("Transcription and analysis completed!")
             
             except Exception as e:
                 st.error(f"An error occurred: {str(e)}")
-                st.error(traceback.format_exc())
 
     # Display results
     if st.session_state.transcript:
@@ -210,9 +197,7 @@ if assemblyai_api_key and openrouter_api_key:
     # Chat interface
     st.subheader("Chat about the Transcript")
     user_input = st.text_input("Ask a question about the transcript:")
-    if user_input:
-        st.session_state.chat_history.append({"role": "user", "content": user_input})
-        
+    if user_input and st.session_state.transcript:
         with st.spinner("Generating response..."):
             try:
                 response = requests.post(
@@ -227,22 +212,14 @@ if assemblyai_api_key and openrouter_api_key:
                         "messages": [
                             {"role": "system", "content": "You are a helpful assistant. Use the provided transcript to answer questions."},
                             {"role": "user", "content": f"Here's the transcript for context:\n\n{st.session_state.transcript}\n\nNow, please answer the following question: {user_input}"}
-                        ] + st.session_state.chat_history
+                        ]
                     }
                 )
                 response.raise_for_status()
                 ai_response = response.json()['choices'][0]['message']['content']
-                st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
+                st.write(f"AI: {ai_response}")
             except requests.exceptions.RequestException as e:
                 st.error(f"Error generating response: {str(e)}")
-                st.error(traceback.format_exc())
-
-    # Display chat history
-    for message in st.session_state.chat_history:
-        if message['role'] == 'user':
-            st.write(f"You: {message['content']}")
-        else:
-            st.write(f"AI: {message['content']}")
 
 else:
     st.warning("Please enter both your AssemblyAI and OpenRouter API keys in the sidebar to proceed.")
