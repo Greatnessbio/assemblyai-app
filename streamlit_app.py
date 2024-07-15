@@ -5,31 +5,18 @@ import json
 import os
 import tempfile
 from moviepy.editor import VideoFileClip
-import yt_dlp
 import traceback
+from pytube import YouTube
+import io
 
 def download_youtube_audio(url):
     try:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            ydl_opts = {
-                'format': 'bestaudio/best',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }],
-                'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
-                'quiet': True,
-                'no_warnings': True,
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                filename = os.path.join(temp_dir, f"{info['id']}.mp3")
-                if not os.path.exists(filename):
-                    raise Exception(f"Downloaded file not found: {filename}")
-                with open(filename, 'rb') as file:
-                    audio_data = file.read()
-            return audio_data
+        yt = YouTube(url)
+        audio_stream = yt.streams.filter(only_audio=True).first()
+        buffer = io.BytesIO()
+        audio_stream.stream_to_buffer(buffer)
+        buffer.seek(0)
+        return buffer.read()
     except Exception as e:
         st.error(f"Error downloading YouTube audio: {str(e)}")
         st.error(traceback.format_exc())
