@@ -1,29 +1,32 @@
 import streamlit as st
+from pytube import YouTube
+import whisper
 import assemblyai as aai
 import requests
 import json
 import os
 import tempfile
 from moviepy.editor import VideoFileClip
-import traceback
-from pytube import YouTube
-import io
 
-@st.cache_data
+# Function to download YouTube audio
 def download_youtube_audio(url):
     try:
         yt = YouTube(url)
-        audio_stream = yt.streams.filter(only_audio=True).first()
-        if not audio_stream:
-            return None
-        buffer = io.BytesIO()
-        audio_stream.stream_to_buffer(buffer)
-        buffer.seek(0)
-        return buffer.read()
+        stream = yt.streams.filter(only_audio=True).first()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_file:
+            stream.download(filename=temp_file.name)
+        return temp_file.name
     except Exception as e:
         st.error(f"Error downloading YouTube audio: {str(e)}")
         return None
 
+# Function to transcribe with Whisper
+def transcribe_with_whisper(audio_file):
+    model = whisper.load_model("base")
+    result = model.transcribe(audio_file)
+    return result['text']
+
+# Function to extract audio from video
 def extract_audio_from_video(video_file):
     try:
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_audio_file:
@@ -64,7 +67,7 @@ def summarize_with_openrouter(transcript, api_key):
 # Streamlit app
 st.set_page_config(page_title="Audio Transcription and Analysis", layout="wide")
 
-st.title("Audio Transcription and Analysis with AssemblyAI and OpenRouter")
+st.title("Audio Transcription and Analysis")
 
 # Sidebar for API keys
 with st.sidebar:
@@ -77,7 +80,7 @@ if assemblyai_api_key and openrouter_api_key:
     aai.settings.api_key = assemblyai_api_key
 
     # File input options
-    input_option = st.radio("Choose input method:", ["Upload File (up to 200MB)", "Provide URL (including YouTube)"])
+    input_option = st.radio("Choose input method:", ["Upload File (up to 200MB)", "Provide YouTube URL"])
 
     if input_option == "Upload File (up to 200MB)":
         uploaded_file = st.file_uploader("Choose an audio or video file (up to 200MB)", type=["mp3", "wav", "m4a", "mp4"])
@@ -89,7 +92,7 @@ if assemblyai_api_key and openrouter_api_key:
             else:
                 st.audio(uploaded_file)
     else:
-        file_url = st.text_input("Enter the URL of the audio, video, or YouTube video:")
+        youtube_url = st.text_input("Enter YouTube video URL:")
 
     # Transcription options
     st.subheader("Transcription and Analysis Options")
@@ -108,17 +111,6 @@ if assemblyai_api_key and openrouter_api_key:
     if st.button("Transcribe and Analyze"):
         with st.spinner("Processing..."):
             try:
-                transcriber = aai.Transcriber()
-                
-                config = aai.TranscriptionConfig(
-                    speaker_labels=speaker_labels,
-                    sentiment_analysis=sentiment_analysis,
-                    iab_categories=topic_detection,
-                    entity_detection=entity_detection,
-                    auto_chapters=auto_chapters,
-                    auto_highlights=key_phrases
-                )
-                
                 if input_option == "Upload File (up to 200MB)":
                     if uploaded_file:
                         if uploaded_file.type == "video/mp4":
@@ -126,47 +118,49 @@ if assemblyai_api_key and openrouter_api_key:
                                 temp_video_file.write(uploaded_file.getvalue())
                                 temp_video_file.flush()
                                 audio_file = extract_audio_from_video(temp_video_file)
-                            if audio_file:
-                                transcript = transcriber.transcribe(audio_file, config)
-                                os.unlink(audio_file)
-                            os.unlink(temp_video_file.name)
                         else:
                             with tempfile.NamedTemporaryFile(delete=False, suffix="." + uploaded_file.name.split(".")[-1]) as temp_file:
                                 temp_file.write(uploaded_file.getvalue())
                                 temp_file.flush()
-                                transcript = transcriber.transcribe(temp_file.name, config)
-                            os.unlink(temp_file.name)
+                                audio_file = temp_file.name
+                        
+                        transcriber = aai.Transcriber()
+                        config = aai.TranscriptionConfig(
+                            speaker_labels=speaker_labels,
+                            sentiment_analysis=sentiment_analysis,
+                            iab_categories=topic_detection,
+                            entity_detection=entity_detection,
+                            auto_chapters=auto_chapters,
+                            auto_highlights=key_phrases
+                        )
+                        transcript = transcriber.transcribe(audio_file, config)
+                        os.unlink(audio_file)
+                        
+                        st.session_state.transcript = transcript.text
                     else:
                         st.error("Please upload a file before transcribing.")
                         st.stop()
                 else:
-                    if file_url:
-                        if "youtube.com" in file_url or "youtu.be" in file_url:
-                            youtube_audio_data = download_youtube_audio(file_url)
-                            if youtube_audio_data:
-                                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_file:
-                                    temp_file.write(youtube_audio_data)
-                                    temp_file.flush()
-                                    transcript = transcriber.transcribe(temp_file.name, config)
-                                os.unlink(temp_file.name)
-                            else:
-                                st.error("Failed to download YouTube audio. The video might be unavailable or restricted.")
-                                st.stop()
+                    if youtube_url:
+                        audio_file = download_youtube_audio(youtube_url)
+                        if audio_file:
+                            st.session_state.transcript = transcribe_with_whisper(audio_file)
+                            os.unlink(audio_file)
                         else:
-                            transcript = transcriber.transcribe(file_url, config)
+                            st.error("Failed to download YouTube audio.")
+                            st.stop()
                     else:
-                        st.error("Please enter a valid URL before transcribing.")
+                        st.error("Please enter a valid YouTube URL.")
                         st.stop()
 
-                st.session_state.transcript = transcript.text
-                st.session_state.summary = summarize_with_openrouter(transcript.text, openrouter_api_key)
+                st.session_state.summary = summarize_with_openrouter(st.session_state.transcript, openrouter_api_key)
                 st.success("Transcription and analysis completed!")
             
             except Exception as e:
                 st.error(f"An error occurred: {str(e)}")
 
     # Display results
-    if st.session_state.transcript:
+    if 'transcript' in st.session_state and st.session_state.transcript:
         st.subheader("Transcription Result")
         with st.expander("Show/Hide Transcript", expanded=True):
             st.write(st.session_state.transcript)
@@ -181,7 +175,7 @@ if assemblyai_api_key and openrouter_api_key:
                 mime="text/plain"
             )
         with col2:
-            if st.session_state.summary:
+            if 'summary' in st.session_state and st.session_state.summary:
                 st.download_button(
                     label="Download Summary",
                     data=st.session_state.summary,
@@ -190,14 +184,14 @@ if assemblyai_api_key and openrouter_api_key:
                 )
 
         # Display analysis results
-        if st.session_state.summary:
+        if 'summary' in st.session_state and st.session_state.summary:
             st.subheader("Summary and Key Information")
             st.write(st.session_state.summary)
 
     # Chat interface
     st.subheader("Chat about the Transcript")
     user_input = st.text_input("Ask a question about the transcript:")
-    if user_input and st.session_state.transcript:
+    if user_input and 'transcript' in st.session_state and st.session_state.transcript:
         with st.spinner("Generating response..."):
             try:
                 response = requests.post(
@@ -222,7 +216,7 @@ if assemblyai_api_key and openrouter_api_key:
                 st.error(f"Error generating response: {str(e)}")
 
 else:
-    st.warning("Please enter both your AssemblyAI and OpenRouter API keys in the sidebar to proceed.")
+    st.warning("Please enter both your AssemblyAI API key and OpenRouter API key in the sidebar to proceed.")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("Powered by AssemblyAI and OpenRouter")
+st.sidebar.markdown("Powered by AssemblyAI, Whisper, and OpenRouter")
