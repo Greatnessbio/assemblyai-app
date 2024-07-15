@@ -5,6 +5,22 @@ import json
 import os
 import tempfile
 from moviepy.editor import VideoFileClip
+import yt_dlp
+
+def download_youtube_audio(url):
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'outtmpl': '%(id)s.%(ext)s',
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        filename = f"{info['id']}.mp3"
+    return filename
 
 # Function to extract audio from video
 def extract_audio_from_video(video_file):
@@ -60,7 +76,7 @@ if assemblyai_api_key and openrouter_api_key:
     aai.settings.api_key = assemblyai_api_key
 
     # File input options
-    input_option = st.radio("Choose input method:", ["Upload File (up to 200MB)", "Provide URL for larger files"])
+    input_option = st.radio("Choose input method:", ["Upload File (up to 200MB)", "Provide URL (including YouTube)"])
 
     if input_option == "Upload File (up to 200MB)":
         uploaded_file = st.file_uploader("Choose an audio or video file (up to 200MB)", type=["mp3", "wav", "m4a", "mp4"])
@@ -72,7 +88,7 @@ if assemblyai_api_key and openrouter_api_key:
             else:
                 st.audio(uploaded_file)
     else:
-        file_url = st.text_input("Enter the URL of the audio or video file:")
+        file_url = st.text_input("Enter the URL of the audio, video, or YouTube video:")
 
     # Transcription options
     st.subheader("Transcription and Analysis Options")
@@ -123,7 +139,12 @@ if assemblyai_api_key and openrouter_api_key:
                         st.stop()
                 else:
                     if file_url:
-                        transcript = transcriber.transcribe(file_url, config)
+                        if "youtube.com" in file_url or "youtu.be" in file_url:
+                            youtube_audio_file = download_youtube_audio(file_url)
+                            transcript = transcriber.transcribe(youtube_audio_file, config)
+                            os.remove(youtube_audio_file)
+                        else:
+                            transcript = transcriber.transcribe(file_url, config)
                     else:
                         st.error("Please enter a valid URL before transcribing.")
                         st.stop()
