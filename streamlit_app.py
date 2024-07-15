@@ -10,25 +10,31 @@ import traceback
 
 def download_youtube_audio(url):
     try:
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'outtmpl': '%(id)s.%(ext)s',
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = f"{info['id']}.mp3"
-        return filename
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+                'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
+                'quiet': True,
+                'no_warnings': True,
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                filename = os.path.join(temp_dir, f"{info['id']}.mp3")
+                if not os.path.exists(filename):
+                    raise Exception(f"Downloaded file not found: {filename}")
+                with open(filename, 'rb') as file:
+                    audio_data = file.read()
+            return audio_data
     except Exception as e:
         st.error(f"Error downloading YouTube audio: {str(e)}")
         st.error(traceback.format_exc())
         return None
 
-# Function to extract audio from video
 def extract_audio_from_video(video_file):
     try:
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_audio_file:
@@ -40,7 +46,6 @@ def extract_audio_from_video(video_file):
         st.error(traceback.format_exc())
         return None
 
-# Function to call OpenRouter API
 @st.cache_data
 def summarize_with_openrouter(transcript, api_key):
     YOUR_SITE_URL = "https://your-app-url.com"  # Replace with your actual URL
@@ -62,7 +67,7 @@ def summarize_with_openrouter(transcript, api_key):
                 ]
             }
         )
-        response.raise_for_status()  # Raise an exception for bad status codes
+        response.raise_for_status()
         return response.json()['choices'][0]['message']['content']
     except requests.exceptions.RequestException as e:
         st.error(f"Error calling OpenRouter API: {str(e)}")
@@ -158,10 +163,13 @@ if assemblyai_api_key and openrouter_api_key:
                 else:
                     if file_url:
                         if "youtube.com" in file_url or "youtu.be" in file_url:
-                            youtube_audio_file = download_youtube_audio(file_url)
-                            if youtube_audio_file:
-                                transcript = transcriber.transcribe(youtube_audio_file, config)
-                                os.remove(youtube_audio_file)
+                            youtube_audio_data = download_youtube_audio(file_url)
+                            if youtube_audio_data:
+                                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_file:
+                                    temp_file.write(youtube_audio_data)
+                                    temp_file.flush()
+                                    transcript = transcriber.transcribe(temp_file.name, config)
+                                os.unlink(temp_file.name)
                             else:
                                 st.error("Failed to download YouTube audio.")
                                 st.stop()
