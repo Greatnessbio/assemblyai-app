@@ -5,17 +5,6 @@ import json
 import os
 import tempfile
 from moviepy.editor import VideoFileClip
-import io
-
-# Function to split large files
-def split_file(file, chunk_size=200*1024*1024):
-    chunks = []
-    while True:
-        chunk = file.read(chunk_size)
-        if not chunk:
-            break
-        chunks.append(chunk)
-    return chunks
 
 # Function to extract audio from video
 def extract_audio_from_video(video_file):
@@ -70,24 +59,20 @@ with st.sidebar:
 if assemblyai_api_key and openrouter_api_key:
     aai.settings.api_key = assemblyai_api_key
 
-    # File uploader
-    uploaded_file = st.file_uploader("Choose an audio or video file", type=["mp3", "wav", "m4a", "mp4"])
+    # File input options
+    input_option = st.radio("Choose input method:", ["Upload File (up to 200MB)", "Provide URL for larger files"])
 
-    if uploaded_file is not None:
-        file_size = uploaded_file.size
-        st.write(f"File size: {file_size / (1024 * 1024):.2f} MB")
-
-        if file_size > 200 * 1024 * 1024:  # If file is larger than 200MB
-            st.warning("File is larger than 200MB. It will be split into smaller chunks for processing.")
-            file_chunks = split_file(uploaded_file)
-            st.write(f"File split into {len(file_chunks)} chunks.")
-        else:
-            file_chunks = [uploaded_file.read()]
-
-        if uploaded_file.type == "video/mp4":
-            st.video(uploaded_file)
-        else:
-            st.audio(uploaded_file)
+    if input_option == "Upload File (up to 200MB)":
+        uploaded_file = st.file_uploader("Choose an audio or video file (up to 200MB)", type=["mp3", "wav", "m4a", "mp4"])
+        if uploaded_file:
+            file_size = uploaded_file.size
+            st.write(f"File size: {file_size / (1024 * 1024):.2f} MB")
+            if uploaded_file.type == "video/mp4":
+                st.video(uploaded_file)
+            else:
+                st.audio(uploaded_file)
+    else:
+        file_url = st.text_input("Enter the URL of the audio or video file:")
 
     # Transcription options
     st.subheader("Transcription and Analysis Options")
@@ -117,32 +102,37 @@ if assemblyai_api_key and openrouter_api_key:
                     auto_highlights=key_phrases
                 )
                 
-                all_transcripts = []
-
-                for i, chunk in enumerate(file_chunks):
-                    with tempfile.NamedTemporaryFile(delete=False, suffix="." + uploaded_file.name.split(".")[-1]) as temp_file:
-                        temp_file.write(chunk)
-                        temp_file.flush()
-
+                if input_option == "Upload File (up to 200MB)":
+                    if uploaded_file:
                         if uploaded_file.type == "video/mp4":
-                            audio_file = extract_audio_from_video(temp_file)
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_video_file:
+                                temp_video_file.write(uploaded_file.getvalue())
+                                temp_video_file.flush()
+                                audio_file = extract_audio_from_video(temp_video_file)
                             transcript = transcriber.transcribe(audio_file, config)
                             os.unlink(audio_file)
+                            os.unlink(temp_video_file.name)
                         else:
-                            transcript = transcriber.transcribe(temp_file.name, config)
-
-                        all_transcripts.append(transcript.text)
-                        os.unlink(temp_file.name)
-
-                    st.write(f"Processed chunk {i+1}/{len(file_chunks)}")
-
-                full_transcript = " ".join(all_transcripts)
+                            with tempfile.NamedTemporaryFile(delete=False, suffix="." + uploaded_file.name.split(".")[-1]) as temp_file:
+                                temp_file.write(uploaded_file.getvalue())
+                                temp_file.flush()
+                                transcript = transcriber.transcribe(temp_file.name, config)
+                            os.unlink(temp_file.name)
+                    else:
+                        st.error("Please upload a file before transcribing.")
+                        return
+                else:
+                    if file_url:
+                        transcript = transcriber.transcribe(file_url, config)
+                    else:
+                        st.error("Please enter a valid URL before transcribing.")
+                        return
 
                 # Store transcript in session state
-                st.session_state.transcript = full_transcript
+                st.session_state.transcript = transcript.text
 
                 # OpenRouter summarization
-                st.session_state.summary = summarize_with_openrouter(full_transcript, openrouter_api_key)
+                st.session_state.summary = summarize_with_openrouter(transcript.text, openrouter_api_key)
 
                 st.success("Transcription and analysis completed!")
             
