@@ -2,3 +2,4 @@ streamlit
 assemblyai
 requests
 moviepy
+yt-dlp
