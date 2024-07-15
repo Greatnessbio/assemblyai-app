@@ -120,13 +120,13 @@ if assemblyai_api_key and openrouter_api_key:
                             os.unlink(temp_file.name)
                     else:
                         st.error("Please upload a file before transcribing.")
-                        return
+                        st.stop()
                 else:
                     if file_url:
                         transcript = transcriber.transcribe(file_url, config)
                     else:
                         st.error("Please enter a valid URL before transcribing.")
-                        return
+                        st.stop()
 
                 # Store transcript in session state
                 st.session_state.transcript = transcript.text
