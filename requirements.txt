@@ -3,3 +3,4 @@ assemblyai
 requests
 moviepy
 pytube
+openai-whisper
