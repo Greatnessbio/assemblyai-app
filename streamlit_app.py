@@ -6,28 +6,39 @@ import os
 import tempfile
 from moviepy.editor import VideoFileClip
 import yt_dlp
+import traceback
 
 def download_youtube_audio(url):
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'outtmpl': '%(id)s.%(ext)s',
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        filename = f"{info['id']}.mp3"
-    return filename
+    try:
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'outtmpl': '%(id)s.%(ext)s',
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = f"{info['id']}.mp3"
+        return filename
+    except Exception as e:
+        st.error(f"Error downloading YouTube audio: {str(e)}")
+        st.error(traceback.format_exc())
+        return None
 
 # Function to extract audio from video
 def extract_audio_from_video(video_file):
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_audio_file:
-        video = VideoFileClip(video_file.name)
-        video.audio.write_audiofile(temp_audio_file.name)
-    return temp_audio_file.name
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_audio_file:
+            video = VideoFileClip(video_file.name)
+            video.audio.write_audiofile(temp_audio_file.name)
+        return temp_audio_file.name
+    except Exception as e:
+        st.error(f"Error extracting audio from video: {str(e)}")
+        st.error(traceback.format_exc())
+        return None
 
 # Function to call OpenRouter API
 @st.cache_data
@@ -35,22 +46,28 @@ def summarize_with_openrouter(transcript, api_key):
     YOUR_SITE_URL = "https://your-app-url.com"  # Replace with your actual URL
     YOUR_APP_NAME = "Transcription Analyzer"  # Replace with your app name
 
-    response = requests.post(
-        url="https://openrouter.ai/api/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "HTTP-Referer": YOUR_SITE_URL,
-            "X-Title": YOUR_APP_NAME,
-        },
-        json={
-            "model": "anthropic/claude-3-sonnet",
-            "messages": [
-                {"role": "system", "content": "You are an AI assistant that summarizes transcripts and extracts key information into a table."},
-                {"role": "user", "content": f"Please summarize the following transcript and extract key information into a table:\n\n{transcript}"}
-            ]
-        }
-    )
-    return response.json()['choices'][0]['message']['content']
+    try:
+        response = requests.post(
+            url="https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "HTTP-Referer": YOUR_SITE_URL,
+                "X-Title": YOUR_APP_NAME,
+            },
+            json={
+                "model": "anthropic/claude-3-sonnet",
+                "messages": [
+                    {"role": "system", "content": "You are an AI assistant that summarizes transcripts and extracts key information into a table."},
+                    {"role": "user", "content": f"Please summarize the following transcript and extract key information into a table:\n\n{transcript}"}
+                ]
+            }
+        )
+        response.raise_for_status()  # Raise an exception for bad status codes
+        return response.json()['choices'][0]['message']['content']
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error calling OpenRouter API: {str(e)}")
+        st.error(traceback.format_exc())
+        return None
 
 # Initialize session state
 if 'transcript' not in st.session_state:
@@ -125,8 +142,9 @@ if assemblyai_api_key and openrouter_api_key:
                                 temp_video_file.write(uploaded_file.getvalue())
                                 temp_video_file.flush()
                                 audio_file = extract_audio_from_video(temp_video_file)
-                            transcript = transcriber.transcribe(audio_file, config)
-                            os.unlink(audio_file)
+                            if audio_file:
+                                transcript = transcriber.transcribe(audio_file, config)
+                                os.unlink(audio_file)
                             os.unlink(temp_video_file.name)
                         else:
                             with tempfile.NamedTemporaryFile(delete=False, suffix="." + uploaded_file.name.split(".")[-1]) as temp_file:
@@ -141,8 +159,12 @@ if assemblyai_api_key and openrouter_api_key:
                     if file_url:
                         if "youtube.com" in file_url or "youtu.be" in file_url:
                             youtube_audio_file = download_youtube_audio(file_url)
-                            transcript = transcriber.transcribe(youtube_audio_file, config)
-                            os.remove(youtube_audio_file)
+                            if youtube_audio_file:
+                                transcript = transcriber.transcribe(youtube_audio_file, config)
+                                os.remove(youtube_audio_file)
+                            else:
+                                st.error("Failed to download YouTube audio.")
+                                st.stop()
                         else:
                             transcript = transcriber.transcribe(file_url, config)
                     else:
@@ -159,6 +181,7 @@ if assemblyai_api_key and openrouter_api_key:
             
             except Exception as e:
                 st.error(f"An error occurred: {str(e)}")
+                st.error(traceback.format_exc())
 
     # Display results
     if st.session_state.transcript:
@@ -196,24 +219,28 @@ if assemblyai_api_key and openrouter_api_key:
         st.session_state.chat_history.append({"role": "user", "content": user_input})
         
         with st.spinner("Generating response..."):
-            response = requests.post(
-                url="https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {openrouter_api_key}",
-                    "HTTP-Referer": "https://your-app-url.com",
-                    "X-Title": "Transcription Analyzer",
-                },
-                json={
-                    "model": "anthropic/claude-3-sonnet",
-                    "messages": [
-                        {"role": "system", "content": "You are a helpful assistant. Use the provided transcript to answer questions."},
-                        {"role": "user", "content": f"Here's the transcript for context:\n\n{st.session_state.transcript}\n\nNow, please answer the following question: {user_input}"}
-                    ] + st.session_state.chat_history
-                }
-            )
-        
-        ai_response = response.json()['choices'][0]['message']['content']
-        st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
+            try:
+                response = requests.post(
+                    url="https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {openrouter_api_key}",
+                        "HTTP-Referer": "https://your-app-url.com",
+                        "X-Title": "Transcription Analyzer",
+                    },
+                    json={
+                        "model": "anthropic/claude-3-sonnet",
+                        "messages": [
+                            {"role": "system", "content": "You are a helpful assistant. Use the provided transcript to answer questions."},
+                            {"role": "user", "content": f"Here's the transcript for context:\n\n{st.session_state.transcript}\n\nNow, please answer the following question: {user_input}"}
+                        ] + st.session_state.chat_history
+                    }
+                )
+                response.raise_for_status()
+                ai_response = response.json()['choices'][0]['message']['content']
+                st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
+            except requests.exceptions.RequestException as e:
+                st.error(f"Error generating response: {str(e)}")
+                st.error(traceback.format_exc())
 
     # Display chat history
     for message in st.session_state.chat_history:
