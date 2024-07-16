@@ -30,10 +30,8 @@ def load_users():
     return st.secrets["users"]
 
 def login(username, password):
-    users = load_users()
-    if username in users and users[username] == password:
-        return True
-    return False
+    return (username == st.secrets["credentials"]["username"] and 
+            password == st.secrets["credentials"]["password"])
 
 @st.cache_data(ttl=3600)
 def get_jina_search_results(query, jina_api_key, max_retries=3, delay=5):
