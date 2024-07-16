@@ -1,5 +1,2 @@
 streamlit
-assemblyai
 requests
-moviepy
-pytube
