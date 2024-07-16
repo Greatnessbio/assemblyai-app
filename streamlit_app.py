@@ -14,101 +14,9 @@ except ImportError:
 
 LOGGER = get_logger(__name__)
 
-def load_api_keys():
-    try:
-        return {
-            "jina": st.secrets["secrets"]["jina_api_key"],
-            "openrouter": st.secrets["secrets"]["openrouter_api_key"],
-            "exa": st.secrets["secrets"]["exa_api_key"] if exa_available else None,
-            "rapidapi": st.secrets["secrets"]["rapidapi_key"]
-        }
-    except KeyError as e:
-        st.error(f"{str(e)} API key not found in secrets.toml. Please add it.")
-        return None
+# ... (keep the existing functions)
 
-def load_users():
-    return st.secrets["users"]
-
-def login(username, password):
-    return (username == st.secrets["credentials"]["username"] and 
-            password == st.secrets["credentials"]["password"])
-
-@st.cache_data(ttl=3600)
-def get_jina_search_results(query, jina_api_key, max_retries=3, delay=5):
-    url = f"https://s.jina.ai/{requests.utils.quote(query)}"
-    headers = {
-        "Accept": "application/json",
-        "Authorization": f"Bearer {jina_api_key}",
-        "X-With-Generated-Alt": "true",
-        "X-With-Images-Summary": "true",
-        "X-With-Links-Summary": "true"
-    }
-    for attempt in range(max_retries):
-        try:
-            response = requests.get(url, headers=headers, timeout=30)
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as e:
-            if attempt < max_retries - 1:
-                time.sleep(delay)
-            else:
-                LOGGER.error(f"Jina AI search request failed after {max_retries} attempts: {e}")
-    return None
-
-@st.cache_data(ttl=3600)
-def get_exa_search_results(url, exa_api_key):
-    if not exa_available:
-        return None
-    exa = Exa(api_key=exa_api_key)
-    try:
-        search_response = exa.find_similar_and_contents(
-            url,
-            highlights={"num_sentences": 2},
-            num_results=10
-        )
-        return search_response.results
-    except Exception as e:
-        LOGGER.error(f"Exa search request failed: {e}")
-    return None
-
-def get_linkedin_company_data(company_url, rapidapi_key):
-    url = "https://linkedin-data-scraper.p.rapidapi.com/company_pro"
-    payload = {"link": company_url}
-    headers = {
-        "x-rapidapi-key": rapidapi_key,
-        "x-rapidapi-host": "linkedin-data-scraper.p.rapidapi.com",
-        "Content-Type": "application/json"
-    }
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as e:
-        LOGGER.error(f"LinkedIn company data request failed: {e}")
-    return None
-
-def get_linkedin_company_posts(company_url, rapidapi_key):
-    url = "https://linkedin-data-scraper.p.rapidapi.com/company_updates"
-    payload = {
-        "company_url": company_url,
-        "posts": 30,
-        "comments": 10,
-        "reposts": 10
-    }
-    headers = {
-        "x-rapidapi-key": rapidapi_key,
-        "x-rapidapi-host": "linkedin-data-scraper.p.rapidapi.com",
-        "Content-Type": "application/json"
-    }
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as e:
-        LOGGER.error(f"LinkedIn company posts request failed: {e}")
-    return None
-
-def process_with_openrouter(prompt, context, openrouter_api_key):
+def generate_search_query(question, openrouter_api_key):
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {openrouter_api_key}",
@@ -118,8 +26,8 @@ def process_with_openrouter(prompt, context, openrouter_api_key):
     payload = {
         "model": "anthropic/claude-3-sonnet-20240229",
         "messages": [
-            {"role": "system", "content": "You are an AI assistant tasked with analyzing company information."},
-            {"role": "user", "content": f"Context:\n{json.dumps(context, indent=2)}\n\nTask: {prompt}"}
+            {"role": "system", "content": "You are a helpful assistant that generates search queries based on user questions. Only generate one search query."},
+            {"role": "user", "content": question}
         ]
     }
 
@@ -131,53 +39,51 @@ def process_with_openrouter(prompt, context, openrouter_api_key):
         LOGGER.error(f"OpenRouter API request failed: {e}")
     return None
 
-def analyze_company_info(context, openrouter_api_key):
-    prompt = """
-    Analyze the provided information and create a detailed company profile including:
-    1. Company name and brief description
-    2. Industry and main products/services
-    3. Company size, location, and founding year
-    4. Key executives and their roles
-    5. Recent company developments or notable achievements
-    """
-    return process_with_openrouter(prompt, context, openrouter_api_key)
+def get_exa_news_results(query, exa_api_key):
+    if not exa_available:
+        return None
+    exa = Exa(api_key=exa_api_key)
+    try:
+        search_response = exa.search(
+            query,
+            use_autoprompt=True,
+            type="neural",
+            num_results=10
+        )
+        return search_response.results
+    except Exception as e:
+        LOGGER.error(f"Exa news search request failed: {e}")
+    return None
 
-def analyze_competitors(context, openrouter_api_key):
-    prompt = """
-    Based on the provided information, analyze the company's competitive landscape:
-    1. Identify main competitors and provide a brief description of each
-    2. Compare the company's products/services with those of competitors
-    3. Analyze the company's unique selling propositions (USPs) and competitive advantages
-    4. Identify potential market threats or challenges from competitors
-    """
-    return process_with_openrouter(prompt, context, openrouter_api_key)
+def get_linkedin_company_insights(company_url, rapidapi_key):
+    url = "https://linkedin-data-api.p.rapidapi.com/get-company-insights"
+    querystring = {"username": company_url.split("/")[-2]}  # Extract company name from URL
+    headers = {
+        "x-rapidapi-key": rapidapi_key,
+        "x-rapidapi-host": "linkedin-data-api.p.rapidapi.com"
+    }
+    try:
+        response = requests.get(url, headers=headers, params=querystring, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        LOGGER.error(f"LinkedIn company insights request failed: {e}")
+    return None
 
-def analyze_linkedin_presence(context, openrouter_api_key):
-    prompt = """
-    Analyze the company's LinkedIn presence based on their profile data and recent posts:
-    1. Follower count and growth trends (if available)
-    2. Posting frequency and engagement rates
-    3. Main themes and topics of their content
-    4. Tone and style of their posts
-    5. Use of hashtags, mentions, and media in posts
-    6. Notable recent updates or announcements
-    7. Overall effectiveness of their LinkedIn strategy
-    """
-    return process_with_openrouter(prompt, context, openrouter_api_key)
-
-def analyze_linkedin_profile(context, openrouter_api_key):
-    prompt = """
-    Analyze the company's LinkedIn profile based on the provided data:
-    1. Follower count and any available growth trends
-    2. Company description and key information
-    3. Stated specialties and focus areas
-    4. Employee count and any insights on company size/growth
-    5. Listed locations and headquarters
-    6. Any notable achievements or milestones mentioned
-    
-    Provide a summary of the company's LinkedIn profile presence and any insights on how they're presenting themselves on the platform.
-    """
-    return process_with_openrouter(prompt, context, openrouter_api_key)
+def get_linkedin_company_posts(company_url, rapidapi_key):
+    url = "https://linkedin-data-api.p.rapidapi.com/get-company-posts"
+    querystring = {"username": company_url.split("/")[-2], "start": "0"}
+    headers = {
+        "x-rapidapi-key": rapidapi_key,
+        "x-rapidapi-host": "linkedin-data-api.p.rapidapi.com"
+    }
+    try:
+        response = requests.get(url, headers=headers, params=querystring, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        LOGGER.error(f"LinkedIn company posts request failed: {e}")
+    return None
 
 def analyze_linkedin_posts(context, openrouter_api_key):
     prompt = """
@@ -194,26 +100,6 @@ def analyze_linkedin_posts(context, openrouter_api_key):
     Provide a summary of the company's content strategy on LinkedIn, including strengths and areas for improvement.
     """
     return process_with_openrouter(prompt, context, openrouter_api_key)
-
-def generate_executive_summary(analyses, openrouter_api_key):
-    context = analyses
-    prompt = """
-    Create a concise executive summary of the company based on the provided analyses. Include:
-    1. Brief company overview and key statistics
-    2. Main products/services and target market
-    3. Key competitive advantages and market position
-    4. Summary of main competitors and competitive landscape
-    5. Overview of LinkedIn presence and social media strategy
-    6. Key strengths, weaknesses, opportunities, and threats (SWOT)
-    7. Main insights and recommendations for future growth
-    
-    The summary should be concise yet comprehensive, highlighting the most important findings from the analysis.
-    """
-    return process_with_openrouter(prompt, context, openrouter_api_key)
-
-def get_download_link(content, filename, text):
-    b64 = base64.b64encode(content.encode()).decode()
-    return f'<a href="data:file/txt;base64,{b64}" download="{filename}">{text}</a>'
 
 def main_app():
     st.title("Comprehensive Company Analyst")
@@ -232,19 +118,28 @@ def main_app():
             exa_results = get_exa_search_results(company_url, api_keys["exa"]) if exa_available else None
             linkedin_data = get_linkedin_company_data(linkedin_url, api_keys["rapidapi"])
             linkedin_posts = get_linkedin_company_posts(linkedin_url, api_keys["rapidapi"])
+            linkedin_insights = get_linkedin_company_insights(linkedin_url, api_keys["rapidapi"])
+            
+            # Generate and perform news search
+            news_query = generate_search_query(f"Latest news about {company_url}", api_keys["openrouter"])
+            news_results = get_exa_news_results(news_query, api_keys["exa"]) if exa_available else None
 
             # Store raw data in session state
             st.session_state.jina_results = jina_results
             st.session_state.exa_results = exa_results
             st.session_state.linkedin_data = linkedin_data
             st.session_state.linkedin_posts = linkedin_posts
+            st.session_state.linkedin_insights = linkedin_insights
+            st.session_state.news_results = news_results
 
             # Prepare context for analysis
             context = {
                 "jina_results": jina_results,
                 "exa_results": [result.__dict__ for result in exa_results] if exa_results else None,
                 "linkedin_data": linkedin_data,
-                "linkedin_posts": linkedin_posts
+                "linkedin_posts": linkedin_posts,
+                "linkedin_insights": linkedin_insights,
+                "news_results": [result.__dict__ for result in news_results] if news_results else None
             }
 
             # Perform analyses
@@ -321,30 +216,15 @@ def main_app():
             with st.expander("Raw LinkedIn Company Posts"):
                 st.json(st.session_state.linkedin_posts)
 
-def login_page():
-    st.title("Login")
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-    if st.button("Login"):
-        if login(username, password):
-            st.session_state.logged_in = True
-            st.success("Logged in successfully!")
-            st.rerun()
-        else:
-            st.error("Invalid username or password")
+        if st.session_state.get('linkedin_insights'):
+            with st.expander("Raw LinkedIn Company Insights"):
+                st.json(st.session_state.linkedin_insights)
 
-def display():
-    if 'logged_in' not in st.session_state:
-        st.session_state.logged_in = False
+        if st.session_state.get('news_results'):
+            with st.expander("Raw News Search Results"):
+                st.json([result.__dict__ for result in st.session_state.news_results])
 
-    if not st.session_state.logged_in:
-        login_page()
-    else:
-        if st.button("Logout"):
-            st.session_state.logged_in = False
-            st.rerun()
-        else:
-            main_app()
+# ... (keep the login_page and display functions)
 
 if __name__ == "__main__":
     display()
