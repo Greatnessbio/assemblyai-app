@@ -29,15 +29,23 @@ def exa_api_call(endpoint, data):
     return response.json()
 
 def get_content(url):
+    if not url:  # Check if URL is empty
+        return None
+
     # First, search for the URL
     search_data = {
         "query": f"url:{url}",
         "numResults": 1,
         "useAutoprompt": False
     }
-    search_result = exa_api_call("search", search_data)
-    
-    if not search_result['results']:
+    try:
+        search_result = exa_api_call("search", search_data)
+    except Exception as e:
+        st.error(f"Error searching for URL: {str(e)}")
+        return None
+
+    if not search_result.get('results'):
+        st.warning(f"No results found for URL: {url}")
         return None
 
     # Then, get the content using the ID from the search result
@@ -45,11 +53,17 @@ def get_content(url):
         "ids": [search_result['results'][0]['id']],
         "text": {}
     }
-    content_result = exa_api_call("contents", content_data)
-    
-    if content_result and content_result[0]['text']:
-        return content_result[0]['text']['text']
-    return None
+    try:
+        content_result = exa_api_call("contents", content_data)
+    except Exception as e:
+        st.error(f"Error retrieving content: {str(e)}")
+        return None
+
+    if content_result and isinstance(content_result, list) and content_result[0].get('text'):
+        return content_result[0]['text'].get('text')
+    else:
+        st.warning(f"No content found for URL: {url}")
+        return None
 
 def openrouter_api_call(prompt):
     url = "https://openrouter.ai/api/v1/chat/completions"
@@ -73,6 +87,10 @@ def main_app():
     company_site = st.text_input("Enter Company Website URL")
     
     if st.button("Analyze"):
+        if not linkedin_url or not company_site:
+            st.error("Please enter both LinkedIn and company website URLs.")
+            return
+
         with st.spinner("Retrieving content..."):
             linkedin_content = get_content(linkedin_url)
             company_content = get_content(company_site)
@@ -100,22 +118,26 @@ def main_app():
                 5. SWOT analysis
                 """
                 
-                analysis_result = openrouter_api_call(prompt)
-            
-            st.success("Analysis complete!")
-            st.write("Analysis result:", analysis_result['choices'][0]['message']['content'])
+                try:
+                    analysis_result = openrouter_api_call(prompt)
+                    st.success("Analysis complete!")
+                    st.write("Analysis result:", analysis_result['choices'][0]['message']['content'])
+                except Exception as e:
+                    st.error(f"Error performing analysis: {str(e)}")
             
             with st.spinner("Finding similar companies..."):
                 similar_data = {
                     "url": linkedin_url,
                     "numResults": 5
                 }
-                similar_companies = exa_api_call("findSimilar", similar_data)
-            
-            st.success("Similar companies found!")
-            st.write("Similar companies:")
-            for company in similar_companies['results']:
-                st.write(f"- {company['title']}: {company['url']}")
+                try:
+                    similar_companies = exa_api_call("findSimilar", similar_data)
+                    st.success("Similar companies found!")
+                    st.write("Similar companies:")
+                    for company in similar_companies.get('results', []):
+                        st.write(f"- {company.get('title', 'Untitled')}: {company.get('url', 'No URL')}")
+                except Exception as e:
+                    st.error(f"Error finding similar companies: {str(e)}")
         else:
             st.error("Failed to retrieve content for one or both URLs. Please check the URLs and try again.")
 
